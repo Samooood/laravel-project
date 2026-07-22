@@ -1,0 +1,92 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ prod ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.3'
+        extensions: mbstring, xml, ctype, json, bcmath, tokenizer, curl, redis
+        coverage: none
+        
+    - name: Install Dependencies
+      run: composer install --no-progress --prefer-dist
+      
+    - name: Run Tests
+      run: php artisan test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.3'
+        extensions: mbstring, xml, ctype, json, bcmath, tokenizer, curl, redis
+        coverage: none
+        
+    - name: Install Dependencies
+      run: composer install --no-dev --optimize-autoloader
+      
+    - name: Setup SSH
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
+        
+    - name: Create Backup
+      run: |
+        ssh -i ~/.ssh/id_rsa root@${{ secrets.SERVER_IP }} << 'EOF'
+          cd /home/prodsite
+          tar -czf backup_$(date +%Y%m%d_%H%M%S).tar.gz public/
+          ls -t backup_*.tar.gz | tail -n +6 | xargs -r rm
+        EOF
+        
+    - name: Deploy to Prod Server
+      run: |
+        rsync -avz --delete \
+          --exclude='.env' \
+          --exclude='node_modules' \
+          --exclude='.git' \
+          --exclude='storage' \
+          -e "ssh -i ~/.ssh/id_rsa" \
+          ./ root@${{ secrets.SERVER_IP }}:/home/prodsite/public/
+          
+    - name: Run Migration & Cache
+      run: |
+        ssh -i ~/.ssh/id_rsa root@${{ secrets.SERVER_IP }} << 'EOF'
+          cd /home/prodsite/public
+          composer install --no-dev --optimize-autoloader
+          php artisan migrate --force
+          php artisan config:cache
+          php artisan route:cache
+          php artisan view:cache
+          php artisan icons:cache
+          chown -R lsws:lsws /home/prodsite
+          systemctl reload lsws
+        EOF
+        
+    - name: Notify Success
+      if: success()
+      run: echo "✅ Production deployment successful!"
+      
+    - name: Notify Failure
+      if: failure()
+      run: echo "❌ Production deployment failed!"
