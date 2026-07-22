@@ -147,14 +147,8 @@ jobs:
     - name: Configure OpenLiteSpeed for IP access
       run: |
         ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'ENDSSH'
-          HTTPD_CONF="/usr/local/lsws/conf/httpd_config.conf"
-          VHOST_CONF="/usr/local/lsws/conf/vhosts/prod.laravel-project.com/vhost.conf"
-          sed -i 's|docRoot.*$VH_ROOT/public_html|docRoot                   $VH_ROOT/public|' "$VHOST_CONF"
-          if ! grep -q 'map.*\*.*prod.laravel-project.com' "$HTTPD_CONF"; then
-            sed -i '/^listener Default/,/^}/ s|^  map.*prod.laravel-project.com prod.laravel-project.com|  map                     prod.laravel-project.com prod.laravel-project.com\n  map                     * prod.laravel-project.com|' "$HTTPD_CONF"
-          fi
+          sed -i 's|docRoot.*$VH_ROOT/public_html|docRoot                   $VH_ROOT/public|' /usr/local/lsws/conf/vhosts/prod.laravel-project.com/vhost.conf
           /usr/local/lsws/bin/lswsctrl restart
-          systemctl status lsws --no-pager | head -5
         ENDSSH
         
     - name: Deployment successful

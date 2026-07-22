@@ -135,26 +135,11 @@ jobs:
       run: |
         ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'ENDSSH'
           HTTPD_CONF="/usr/local/lsws/conf/httpd_config.conf"
-          VHOST_CONF="/usr/local/lsws/conf/vhosts/dev.laravel-project.com/vhost.conf"
-
-          # Fix 1: Change docRoot from public_html to public
-          sed -i 's|docRoot.*$VH_ROOT/public_html|docRoot                   $VH_ROOT/public|' "$VHOST_CONF"
-          echo "Fixed docRoot in vhost.conf"
-
-          # Fix 2: Add catch-all mapping for IP access in httpd_config.conf
-          if ! grep -q 'map.*\*.*dev.laravel-project.com' "$HTTPD_CONF"; then
-            sed -i '/^listener Default/,/^}/ s|map.*dev.laravel-project.com.*dev.laravel-project.com|map                     dev.laravel-project.com dev.laravel-project.com\n  map                     * dev.laravel-project.com|' "$HTTPD_CONF"
-            echo "Added catch-all mapping"
-          else
-            echo "Catch-all already exists"
+          sed -i 's|docRoot.*$VH_ROOT/public_html|docRoot                   $VH_ROOT/public|' /usr/local/lsws/conf/vhosts/dev.laravel-project.com/vhost.conf
+          if ! grep -q 'map \* dev.laravel-project.com' "$HTTPD_CONF"; then
+            sed -i '/^listener Default/,/^}/ s|  map                     dev.laravel-project.com dev.laravel-project.com|  map                     dev.laravel-project.com dev.laravel-project.com\n  map                     * dev.laravel-project.com|' "$HTTPD_CONF"
           fi
-
-          # Restart LiteSpeed
           /usr/local/lsws/bin/lswsctrl restart
-          echo "LiteSpeed restarted"
-
-          # Verify
-          systemctl status lsws --no-pager | head -5
         ENDSSH
         
     - name: Deployment successful
