@@ -103,7 +103,7 @@ jobs:
             cp .env.example .env
             php artisan key:generate
           fi
-          chown -R lsws:lsws ${{ env.DEPLOY_PATH }}
+          chown -R root:root ${{ env.DEPLOY_PATH }}
         EOF
         
     - name: Install dependencies on server
@@ -126,7 +126,7 @@ jobs:
     - name: Set permissions
       run: |
         ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'EOF'
-          chown -R lsws:lsws /home/dev.laravel-project.com
+          chown -R root:root ${{ env.DEPLOY_PATH }}
           chmod -R 755 ${{ env.DEPLOY_PATH }}/storage
           chmod -R 755 ${{ env.DEPLOY_PATH }}/bootstrap/cache
         EOF
