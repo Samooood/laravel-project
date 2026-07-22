@@ -54,29 +54,33 @@ jobs:
     - name: Install Production Dependencies
       run: composer install --no-dev --optimize-autoloader
       
-    - name: Setup SSH
+    - name: Setup SSH Key
       run: |
         mkdir -p ~/.ssh
+        chmod 700 ~/.ssh
         echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
         chmod 600 ~/.ssh/deploy_key
-        ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts 2>/dev/null
+        ssh-keyscan -p ${{ secrets.SSH_PORT || 22 }} -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+        
+    - name: Test SSH Connection
+      run: |
+        ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} "echo 'SSH connection successful'"
         
     - name: Create backup
       run: |
-        ssh -i ~/.ssh/deploy_key root@${{ secrets.SERVER_IP }} << 'EOF'
+        ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'EOF'
           BACKUP_DIR="/home/prod.laravel-project.com/backups"
           mkdir -p $BACKUP_DIR
           TIMESTAMP=$(date +%Y%m%d_%H%M%S)
           if [ -d "${{ env.DEPLOY_PATH }}" ]; then
             tar -czf $BACKUP_DIR/backup_$TIMESTAMP.tar.gz -C ${{ env.DEPLOY_PATH }} .
           fi
-          # Keep only last 5 backups
           ls -t $BACKUP_DIR/backup_*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm
         EOF
         
     - name: Create deployment directory
       run: |
-        ssh -i ~/.ssh/deploy_key root@${{ secrets.SERVER_IP }} << 'EOF'
+        ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'EOF'
           mkdir -p ${{ env.DEPLOY_PATH }}
           mkdir -p ${{ env.DEPLOY_PATH }}/storage/app
           mkdir -p ${{ env.DEPLOY_PATH }}/storage/framework/cache
@@ -96,18 +100,18 @@ jobs:
           --exclude='storage' \
           --exclude='tests' \
           --exclude='backups' \
-          -e "ssh -i ~/.ssh/deploy_key" \
-          ./ root@${{ secrets.SERVER_IP }}:${{ env.DEPLOY_PATH }}/
+          -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }}" \
+          ./ ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }}:${{ env.DEPLOY_PATH }}/
           
     - name: Sync storage directory
       run: |
         rsync -avz \
-          -e "ssh -i ~/.ssh/deploy_key" \
-          ./storage/ root@${{ secrets.SERVER_IP }}:${{ env.DEPLOY_PATH }}/storage/
+          -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }}" \
+          ./storage/ ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }}:${{ env.DEPLOY_PATH }}/storage/
           
     - name: Setup environment file
       run: |
-        ssh -i ~/.ssh/deploy_key root@${{ secrets.SERVER_IP }} << 'EOF'
+        ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'EOF'
           cd ${{ env.DEPLOY_PATH }}
           if [ ! -f .env ]; then
             cp .env.example .env
@@ -117,14 +121,14 @@ jobs:
         
     - name: Install dependencies on server
       run: |
-        ssh -i ~/.ssh/deploy_key root@${{ secrets.SERVER_IP }} << 'EOF'
+        ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'EOF'
           cd ${{ env.DEPLOY_PATH }}
           composer install --no-dev --optimize-autoloader
         EOF
         
     - name: Run migrations and cache
       run: |
-        ssh -i ~/.ssh/deploy_key root@${{ secrets.SERVER_IP }} << 'EOF'
+        ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'EOF'
           cd ${{ env.DEPLOY_PATH }}
           php artisan migrate --force
           php artisan config:cache
@@ -135,7 +139,7 @@ jobs:
         
     - name: Set permissions
       run: |
-        ssh -i ~/.ssh/deploy_key root@${{ secrets.SERVER_IP }} << 'EOF'
+        ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'EOF'
           chown -R lsws:lsws /home/prod.laravel-project.com
           chmod -R 755 ${{ env.DEPLOY_PATH }}/storage
           chmod -R 755 ${{ env.DEPLOY_PATH }}/bootstrap/cache
@@ -143,13 +147,13 @@ jobs:
         
     - name: Reload web server
       run: |
-        ssh -i ~/.ssh/deploy_key root@${{ secrets.SERVER_IP }} << 'EOF'
+        ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'EOF'
           systemctl reload lsws 2>/dev/null || systemctl restart lsws
         EOF
         
     - name: Deployment successful
       if: success()
-      run: echo "✅ Production deployment to ${{ secrets.SERVER_IP }} successful!"
+      run: echo "✅ Production deployment successful!"
       
     - name: Deployment failed
       if: failure()
