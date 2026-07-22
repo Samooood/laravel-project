@@ -1,151 +1,24 @@
-name: Deploy to Development
+name: Deploy Development
 
 on:
   push:
-    branches: [ dev ]
+    branches:
+      - dev
   workflow_dispatch:
 
-env:
-  DEPLOY_PATH: /home/dev.laravel-project.com/public
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: true
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Setup PHP
-      uses: shivammathur/setup-php@v2
-      with:
-        php-version: '8.4'
-        extensions: mbstring, xml, ctype, json, bcmath, tokenizer, curl, redis, fileinfo, dom
-        coverage: none
-        
-    - name: Install Dependencies
-      run: composer install --no-progress --prefer-dist
-      
-    - name: Prepare Environment
-      run: |
-        cp .env.example .env
-        php artisan key:generate
-        
-    - name: Run Tests
-      run: php artisan test
-
   deploy:
-    needs: test
-    runs-on: ubuntu-latest
-    if: success()
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Setup PHP
-      uses: shivammathur/setup-php@v2
-      with:
-        php-version: '8.4'
-        extensions: mbstring, xml, ctype, json, bcmath, tokenizer, curl, redis, fileinfo, dom
-        coverage: none
-        
-    - name: Install Production Dependencies
-      run: composer install --no-dev --optimize-autoloader
-      
-    - name: Setup SSH Key
-      run: |
-        mkdir -p ~/.ssh
-        chmod 700 ~/.ssh
-        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-        chmod 600 ~/.ssh/deploy_key
-        ssh-keyscan -p ${{ secrets.SSH_PORT || 22 }} -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
-        echo "SSH key setup complete"
-        
-    - name: Test SSH Connection
-      run: |
-        ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} "echo 'SSH connection successful'"
-        
-    - name: Create deployment directory
-      run: |
-        ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'EOF'
-          mkdir -p ${{ env.DEPLOY_PATH }}
-          mkdir -p ${{ env.DEPLOY_PATH }}/storage/app
-          mkdir -p ${{ env.DEPLOY_PATH }}/storage/framework/cache
-          mkdir -p ${{ env.DEPLOY_PATH }}/storage/framework/sessions
-          mkdir -p ${{ env.DEPLOY_PATH }}/storage/framework/views
-          mkdir -p ${{ env.DEPLOY_PATH }}/storage/logs
-          mkdir -p ${{ env.DEPLOY_PATH }}/bootstrap/cache
-        EOF
-        
-    - name: Sync files to server
-      run: |
-        rsync -avz --delete \
-          --exclude='.env' \
-          --exclude='node_modules' \
-          --exclude='.git' \
-          --exclude='storage' \
-          --exclude='tests' \
-          -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }}" \
-          ./ ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }}:${{ env.DEPLOY_PATH }}/
-          
-    - name: Sync storage directory
-      run: |
-        rsync -avz \
-          -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }}" \
-          ./storage/ ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }}:${{ env.DEPLOY_PATH }}/storage/
-          
-    - name: Setup environment file
-      run: |
-        ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'EOF'
-          cd ${{ env.DEPLOY_PATH }}
-          if [ ! -f .env ]; then
-            cp .env.example .env
-            php artisan key:generate
-          fi
-          chown -R root:root ${{ env.DEPLOY_PATH }}
-        EOF
-        
-    - name: Install dependencies on server
-      run: |
-        ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'EOF'
-          cd ${{ env.DEPLOY_PATH }}
-          composer install --no-dev --optimize-autoloader
-        EOF
-        
-    - name: Run migrations and cache
-      run: |
-        ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'EOF'
-          cd ${{ env.DEPLOY_PATH }}
-          php artisan migrate --force
-          php artisan config:cache
-          php artisan route:cache
-          php artisan view:cache
-        EOF
-        
-    - name: Set permissions
-      run: |
-        ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'EOF'
-          chown -R root:root ${{ env.DEPLOY_PATH }}
-          chmod -R 755 ${{ env.DEPLOY_PATH }}/storage
-          chmod -R 755 ${{ env.DEPLOY_PATH }}/bootstrap/cache
-        EOF
-        
-    - name: Configure OpenLiteSpeed for IP access
-      run: |
-        ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'ENDSSH'
-          HTTPD_CONF="/usr/local/lsws/conf/httpd_config.conf"
-          sed -i 's|docRoot.*$VH_ROOT/public_html|docRoot                   $VH_ROOT/public|' /usr/local/lsws/conf/vhosts/dev.laravel-project.com/vhost.conf
-          if ! grep -q 'map \* dev.laravel-project.com' "$HTTPD_CONF"; then
-            sed -i '/^listener Default/,/^}/ s|  map                     dev.laravel-project.com dev.laravel-project.com|  map                     dev.laravel-project.com dev.laravel-project.com\n  map                     * dev.laravel-project.com|' "$HTTPD_CONF"
-          fi
-          /usr/local/lsws/bin/lswsctrl restart
-        ENDSSH
-        
-    - name: Deployment successful
-      if: success()
-      run: echo "✅ Dev deployment successful!"
-      
-    - name: Deployment failed
-      if: failure()
-      run: echo "❌ Dev deployment failed!"
+    uses: ./.github/workflows/deploy-laravel.yml
+    with:
+      environment_name: development
+      deploy_path: /home/dev.laravel-project.com/public
+      site_user: devla3594
+      port: 8080
+    secrets: inherit
