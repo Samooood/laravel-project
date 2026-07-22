@@ -134,28 +134,82 @@ jobs:
     - name: Configure OpenLiteSpeed for IP access (no domain)
       run: |
         ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'ENDSSH'
-          # Find CyberPanel's default vHost and modify it
-          # CyberPanel uses /home/cyberpanel/ for default or named vhosts
+          # Find LSWS httpd.conf
+          HTTPD_CONF="/usr/local/lsws/conf/httpd.conf"
           
-          # Find all vhconf.conf files
-          echo "=== Finding vHost configs ==="
-          find /usr/local/lsws -name "vhconf.conf" 2>/dev/null
-          find /home -name "vhconf.conf" 2>/dev/null
+          if [ ! -f "$HTTPD_CONF" ]; then
+            echo "ERROR: httpd.conf not found!"
+            exit 1
+          fi
           
-          # Check current httpd.conf
-          echo "=== Current httpd.conf listeners ==="
-          grep -A5 "listener" /usr/local/lsws/conf/httpd.conf 2>/dev/null | head -30
+          echo "Found httpd.conf at $HTTPD_CONF"
           
-          # Find the main vhost directory  
-          echo "=== vHost directories ==="
-          ls -la /usr/local/lsws/conf/vhosts/ 2>/dev/null
-          ls -la /home/ 2>/dev/null
+          # Backup original
+          cp "$HTTPD_CONF" "${HTTPD_CONF}.bak.$(date +%s)"
           
-          # Find all conf files
-          echo "=== All LSWS conf ==="
-          ls -la /usr/local/lsws/conf/ 2>/dev/null
+          # Check if there's already a listener on port 80
+          if grep -q 'address.*\*:80' "$HTTPD_CONF"; then
+            echo "Port 80 listener already exists"
+          else
+            echo "Adding port 80 listener..."
+            cat >> "$HTTPD_CONF" << 'LISTENER'
+
+          listener Default {
+              address *:80
+              secure 0
+              map defaultVhost *
+          }
+          LISTENER
+          fi
           
-          echo "=== Done diagnostics ==="
+          # Create/modify the default vhost config
+          DEFAULT_VHOST_DIR="/usr/local/lsws/conf/vhosts/defaultVhost"
+          mkdir -p "$DEFAULT_VHOST_DIR"
+          
+          cat > "$DEFAULT_VHOST_DIR/vhconf.conf" << 'VHOSTCONF'
+          vhRoot /home/dev.laravel-project.com/public
+          configFile /usr/local/lsws/conf/vhosts/defaultVhost/vhconf.conf
+          allowSymbolLink 1
+          enableScript 1
+          restrained 0
+          setUIDMode 2
+          
+          indexFiles {
+              indexFiles index.php
+          }
+          
+          errorpage 404 {
+              url /index.php
+          }
+          
+          accessLog {
+              fileName logs/access.log
+              useServer 1
+          }
+          
+          scripAliases {
+              lsapi /usr/local/lsws/lsphp84/bin/lsphp
+          }
+          VHOSTCONF
+          
+          # Create logs dir
+          mkdir -p "$DEFAULT_VHOST_DIR/logs"
+          
+          # Make sure UFW allows port 80
+          ufw allow 80/tcp 2>/dev/null || true
+          
+          # Graceful restart
+          /usr/local/lsws/bin/lswsctrl graceful 2>/dev/null
+          if [ $? -ne 0 ]; then
+            echo "Graceful restart failed, doing full restart..."
+            systemctl restart lsws
+          else
+            echo "Graceful restart successful"
+          fi
+          
+          # Verify
+          echo "=== Checking if LSWS is running ==="
+          systemctl status lsws --no-pager | head -5
         ENDSSH
         
     - name: Deployment successful
