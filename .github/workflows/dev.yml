@@ -131,11 +131,32 @@ jobs:
           chmod -R 755 ${{ env.DEPLOY_PATH }}/bootstrap/cache
         EOF
         
-    - name: Reload web server
+    - name: Configure OpenLiteSpeed for IP access (no domain)
       run: |
-        ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'EOF'
-          systemctl reload lsws 2>/dev/null || systemctl restart lsws
-        EOF
+        ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'ENDSSH'
+          # Find CyberPanel's default vHost and modify it
+          # CyberPanel uses /home/cyberpanel/ for default or named vhosts
+          
+          # Find all vhconf.conf files
+          echo "=== Finding vHost configs ==="
+          find /usr/local/lsws -name "vhconf.conf" 2>/dev/null
+          find /home -name "vhconf.conf" 2>/dev/null
+          
+          # Check current httpd.conf
+          echo "=== Current httpd.conf listeners ==="
+          grep -A5 "listener" /usr/local/lsws/conf/httpd.conf 2>/dev/null | head -30
+          
+          # Find the main vhost directory  
+          echo "=== vHost directories ==="
+          ls -la /usr/local/lsws/conf/vhosts/ 2>/dev/null
+          ls -la /home/ 2>/dev/null
+          
+          # Find all conf files
+          echo "=== All LSWS conf ==="
+          ls -la /usr/local/lsws/conf/ 2>/dev/null
+          
+          echo "=== Done diagnostics ==="
+        ENDSSH
         
     - name: Deployment successful
       if: success()
