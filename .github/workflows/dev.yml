@@ -3,6 +3,10 @@ name: Deploy to Development
 on:
   push:
     branches: [ dev ]
+  workflow_dispatch:
+
+env:
+  DEPLOY_PATH: /home/dev.laravel-project.com/public
 
 jobs:
   test:
@@ -16,7 +20,7 @@ jobs:
       uses: shivammathur/setup-php@v2
       with:
         php-version: '8.3'
-        extensions: mbstring, xml, ctype, json, bcmath, tokenizer, curl, redis
+        extensions: mbstring, xml, ctype, json, bcmath, tokenizer, curl, redis, fileinfo, dom
         coverage: none
         
     - name: Install Dependencies
@@ -28,6 +32,7 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-latest
+    if: success()
     
     steps:
     - name: Checkout code
@@ -37,44 +42,94 @@ jobs:
       uses: shivammathur/setup-php@v2
       with:
         php-version: '8.3'
-        extensions: mbstring, xml, ctype, json, bcmath, tokenizer, curl, redis
+        extensions: mbstring, xml, ctype, json, bcmath, tokenizer, curl, redis, fileinfo, dom
         coverage: none
         
-    - name: Install Dependencies
+    - name: Install Production Dependencies
       run: composer install --no-dev --optimize-autoloader
       
     - name: Setup SSH
       run: |
         mkdir -p ~/.ssh
-        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-        chmod 600 ~/.ssh/id_rsa
-        ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+        chmod 600 ~/.ssh/deploy_key
+        ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts 2>/dev/null
         
-    - name: Deploy to Dev Server
+    - name: Create deployment directory
+      run: |
+        ssh -i ~/.ssh/deploy_key root@${{ secrets.SERVER_IP }} << 'EOF'
+          mkdir -p ${{ env.DEPLOY_PATH }}
+          mkdir -p ${{ env.DEPLOY_PATH }}/storage/app
+          mkdir -p ${{ env.DEPLOY_PATH }}/storage/framework/cache
+          mkdir -p ${{ env.DEPLOY_PATH }}/storage/framework/sessions
+          mkdir -p ${{ env.DEPLOY_PATH }}/storage/framework/views
+          mkdir -p ${{ env.DEPLOY_PATH }}/storage/logs
+          mkdir -p ${{ env.DEPLOY_PATH }}/bootstrap/cache
+        EOF
+        
+    - name: Sync files to server
       run: |
         rsync -avz --delete \
           --exclude='.env' \
+          --exclude='.env.example' \
           --exclude='node_modules' \
           --exclude='.git' \
-          -e "ssh -i ~/.ssh/id_rsa" \
-          ./ root@${{ secrets.SERVER_IP }}:/home/devsite/public/
+          --exclude='storage' \
+          --exclude='tests' \
+          -e "ssh -i ~/.ssh/deploy_key" \
+          ./ root@${{ secrets.SERVER_IP }}:${{ env.DEPLOY_PATH }}/
           
-    - name: Run Migration & Cache
+    - name: Sync storage directory
       run: |
-        ssh -i ~/.ssh/id_rsa root@${{ secrets.SERVER_IP }} << 'EOF'
-          cd /home/devsite/public
+        rsync -avz \
+          -e "ssh -i ~/.ssh/deploy_key" \
+          ./storage/ root@${{ secrets.SERVER_IP }}:${{ env.DEPLOY_PATH }}/storage/
+          
+    - name: Setup environment file
+      run: |
+        ssh -i ~/.ssh/deploy_key root@${{ secrets.SERVER_IP }} << 'EOF'
+          cd ${{ env.DEPLOY_PATH }}
+          if [ ! -f .env ]; then
+            cp .env.example .env
+            php artisan key:generate
+          fi
+        EOF
+        
+    - name: Install dependencies on server
+      run: |
+        ssh -i ~/.ssh/deploy_key root@${{ secrets.SERVER_IP }} << 'EOF'
+          cd ${{ env.DEPLOY_PATH }}
           composer install --no-dev --optimize-autoloader
+        EOF
+        
+    - name: Run migrations and cache
+      run: |
+        ssh -i ~/.ssh/deploy_key root@${{ secrets.SERVER_IP }} << 'EOF'
+          cd ${{ env.DEPLOY_PATH }}
           php artisan migrate --force
           php artisan config:cache
           php artisan route:cache
           php artisan view:cache
-          chown -R lsws:lsws /home/devsite
         EOF
         
-    - name: Notify Success
+    - name: Set permissions
+      run: |
+        ssh -i ~/.ssh/deploy_key root@${{ secrets.SERVER_IP }} << 'EOF'
+          chown -R lsws:lsws /home/dev.laravel-project.com
+          chmod -R 755 ${{ env.DEPLOY_PATH }}/storage
+          chmod -R 755 ${{ env.DEPLOY_PATH }}/bootstrap/cache
+        EOF
+        
+    - name: Reload web server
+      run: |
+        ssh -i ~/.ssh/deploy_key root@${{ secrets.SERVER_IP }} << 'EOF'
+          systemctl reload lsws 2>/dev/null || systemctl restart lsws
+        EOF
+        
+    - name: Deployment successful
       if: success()
-      run: echo "✅ Dev deployment successful!"
+      run: echo "✅ Dev deployment to ${{ secrets.SERVER_IP }} successful!"
       
-    - name: Notify Failure
+    - name: Deployment failed
       if: failure()
       run: echo "❌ Dev deployment failed!"
