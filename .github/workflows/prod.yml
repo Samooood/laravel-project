@@ -15,10 +15,113 @@ concurrency:
 
 jobs:
   deploy:
-    uses: ./.github/workflows/deploy-laravel.yml
-    with:
-      environment_name: production
-      deploy_path: /home/prod.laravel-project.com/public
-      site_user: prodl5985
-      port: 80
-    secrets: inherit
+    name: Deploy
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up PHP 8.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, xml, ctype, json, bcmath, tokenizer, curl, fileinfo, dom
+          coverage: none
+
+      - name: Validate Composer metadata
+        run: composer validate --strict --no-interaction
+
+      - name: Install test dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare test environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate --force
+
+      - name: Run tests
+        run: php artisan test
+
+      - name: Configure SSH
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          test -n "$SSH_HOST"
+          test -n "$SSH_PRIVATE_KEY"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          chmod 600 ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" -o StrictHostKeyChecking=no "$SSH_HOST" true
+
+      - name: Synchronize application files
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+        run: |
+          rsync -az --delete-delay \
+            --exclude='.env' \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            --exclude='storage' \
+            --exclude='vendor' \
+            --exclude='tests' \
+            --exclude='database/*.sqlite' \
+            -e "ssh -i ~/.ssh/deploy_key -p $SSH_PORT -o StrictHostKeyChecking=no" \
+            ./ "$SSH_USERNAME@$SSH_HOST:/home/prod.laravel-project.com/public/"
+
+      - name: Install, migrate, and optimize on the server
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" -o StrictHostKeyChecking=no "$SSH_USERNAME@$SSH_HOST" <<'EOF'
+          set -euo pipefail
+
+          DEPLOY_PATH='/home/prod.laravel-project.com/public'
+          SITE_USER='prodl5985'
+
+          mkdir -p "$DEPLOY_PATH/storage/app" \
+                   "$DEPLOY_PATH/storage/framework/cache" \
+                   "$DEPLOY_PATH/storage/framework/sessions" \
+                   "$DEPLOY_PATH/storage/framework/views" \
+                   "$DEPLOY_PATH/storage/logs" \
+                   "$DEPLOY_PATH/bootstrap/cache" \
+                   "$DEPLOY_PATH/database"
+
+          cd "$DEPLOY_PATH"
+          if [ ! -f .env ]; then
+            cp .env.example .env
+          fi
+
+          chown -R "$SITE_USER:$SITE_USER" "$DEPLOY_PATH"
+          chmod 640 .env
+          chmod -R 775 storage bootstrap/cache database
+
+          if ! grep -q '^APP_KEY=base64:' .env; then
+            sudo -u "$SITE_USER" /usr/local/lsws/lsphp84/bin/php artisan key:generate --force
+          fi
+
+          sudo -u "$SITE_USER" /usr/local/lsws/lsphp84/bin/php $(which composer) install --no-dev --prefer-dist --no-interaction --optimize-autoloader
+          sudo -u "$SITE_USER" /usr/local/lsws/lsphp84/bin/php artisan migrate --force
+          sudo -u "$SITE_USER" /usr/local/lsws/lsphp84/bin/php artisan optimize:clear
+          sudo -u "$SITE_USER" /usr/local/lsws/lsphp84/bin/php artisan config:cache
+          sudo -u "$SITE_USER" /usr/local/lsws/lsphp84/bin/php artisan route:cache
+          sudo -u "$SITE_USER" /usr/local/lsws/lsphp84/bin/php artisan view:cache
+          EOF
+
+      - name: Verify deployed application
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" -o StrictHostKeyChecking=no "$SSH_USERNAME@$SSH_HOST" \
+            "curl --fail --silent --show-error --max-time 15 http://127.0.0.1:80/ > /dev/null"
