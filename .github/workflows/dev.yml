@@ -1,7 +1,7 @@
 name: Deploy Development
 
 on:
-  push:
+  push: 
     branches:
       - dev
   workflow_dispatch:
@@ -92,7 +92,7 @@ jobs:
           chmod 640 .env
           chmod -R 775 storage bootstrap/cache database
 
-          if ! grep -q '^APP_KEY=base64:' .env; then
+          if ! grep -q '^APP_KEY=base64:' .env; then 
             sudo -u "$SITE_USER" /usr/local/lsws/lsphp84/bin/php artisan key:generate --force
           fi
 
