@@ -67,38 +67,41 @@ jobs:
             -e "ssh -p ${{ secrets.SSH_PORT || '22' }}" \
             ./ ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }}:/home/prod.laravel-project.com/public/
 
-      - name: Deploy to server
+      - name: Install, migrate, and optimize on the server
         run: |
           ssh -p ${{ secrets.SSH_PORT || '22' }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} <<'EOF'
           set -euo pipefail
 
           DEPLOY_PATH='/home/prod.laravel-project.com/public'
           SITE_USER='prodl5985'
-          PHP='/usr/local/lsws/lsphp84/bin/php'
+
+          mkdir -p "$DEPLOY_PATH/storage/app" \
+                   "$DEPLOY_PATH/storage/framework/cache" \
+                   "$DEPLOY_PATH/storage/framework/sessions" \
+                   "$DEPLOY_PATH/storage/framework/views" \
+                   "$DEPLOY_PATH/storage/logs" \
+                   "$DEPLOY_PATH/bootstrap/cache" \
+                   "$DEPLOY_PATH/database"
 
           cd "$DEPLOY_PATH"
+          if [ ! -f .env ]; then
+            cp .env.example .env
+          fi
 
-          # 1. تفعيل وضع الصيانة
-          sudo -u "$SITE_USER" "$PHP" artisan down || true
+          chown -R "$SITE_USER:$SITE_USER" "$DEPLOY_PATH"
+          chmod 640 .env
+          chmod -R 775 storage bootstrap/cache database
 
-          # 2. تحديث الاعتماديات
-          sudo -u "$SITE_USER" "$PHP" $(which composer) install --no-dev --prefer-dist --no-interaction --optimize-autoloader
+          if ! grep -q '^APP_KEY=base64:' .env; then
+            sudo -u "$SITE_USER" /usr/local/lsws/lsphp84/bin/php artisan key:generate --force
+          fi
 
-          # 3. تنفيذ الترحيلات
-          sudo -u "$SITE_USER" "$PHP" artisan migrate --force
-
-          # 4. تنظيف وإعادة بناء التخزين المؤقت
-          sudo -u "$SITE_USER" "$PHP" artisan optimize:clear
-          sudo -u "$SITE_USER" "$PHP" artisan config:cache
-          sudo -u "$SITE_USER" "$PHP" artisan route:cache
-          sudo -u "$SITE_USER" "$PHP" artisan view:cache
-          sudo -u "$SITE_USER" "$PHP" artisan event:cache
-
-          # 5. إعادة تشغيل الطوابير
-          sudo -u "$SITE_USER" "$PHP" artisan queue:restart
-
-          # 6. إيقاف وضع الصيانة
-          sudo -u "$SITE_USER" "$PHP" artisan up
+          sudo -u "$SITE_USER" /usr/local/lsws/lsphp84/bin/php $(which composer) install --no-dev --prefer-dist --no-interaction --optimize-autoloader
+          sudo -u "$SITE_USER" /usr/local/lsws/lsphp84/bin/php artisan migrate --force
+          sudo -u "$SITE_USER" /usr/local/lsws/lsphp84/bin/php artisan optimize:clear
+          sudo -u "$SITE_USER" /usr/local/lsws/lsphp84/bin/php artisan config:cache
+          sudo -u "$SITE_USER" /usr/local/lsws/lsphp84/bin/php artisan route:cache
+          sudo -u "$SITE_USER" /usr/local/lsws/lsphp84/bin/php artisan view:cache
           EOF
 
       - name: Verify deployed application
