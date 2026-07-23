@@ -1,10 +1,10 @@
 name: Deploy Development
 
 on:
-  push: 
+  push:       
     branches:
       - dev
-  workflow_dispatch:
+  workflow_dispatch:  
 
 permissions:
   contents: read
