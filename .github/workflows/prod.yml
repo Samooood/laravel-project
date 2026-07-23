@@ -44,26 +44,17 @@ jobs:
       - name: Run tests
         run: php artisan test
 
-      - name: Configure SSH
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add server to known hosts
         run: |
-          test -n "$SSH_HOST"
-          test -n "$SSH_PRIVATE_KEY"
-          install -d -m 700 ~/.ssh
-          echo "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
-          chmod 600 ~/.ssh/known_hosts
-          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" -o StrictHostKeyChecking=no "$SSH_HOST" true
+          mkdir -p ~/.ssh
+          ssh-keyscan -p ${{ secrets.SSH_PORT || '22' }} ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
 
       - name: Synchronize application files
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
-          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
         run: |
           rsync -az --delete-delay \
             --exclude='.env' \
@@ -73,16 +64,12 @@ jobs:
             --exclude='vendor' \
             --exclude='tests' \
             --exclude='database/*.sqlite' \
-            -e "ssh -i ~/.ssh/deploy_key -p $SSH_PORT -o StrictHostKeyChecking=no" \
-            ./ "$SSH_USERNAME@$SSH_HOST:/home/prod.laravel-project.com/public/"
+            -e "ssh -p ${{ secrets.SSH_PORT || '22' }}" \
+            ./ ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }}:/home/prod.laravel-project.com/public/
 
       - name: Install, migrate, and optimize on the server
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
-          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
         run: |
-          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" -o StrictHostKeyChecking=no "$SSH_USERNAME@$SSH_HOST" <<'EOF'
+          ssh -p ${{ secrets.SSH_PORT || '22' }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} <<'EOF'
           set -euo pipefail
 
           DEPLOY_PATH='/home/prod.laravel-project.com/public'
@@ -118,10 +105,6 @@ jobs:
           EOF
 
       - name: Verify deployed application
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
-          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
         run: |
-          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" -o StrictHostKeyChecking=no "$SSH_USERNAME@$SSH_HOST" \
+          ssh -p ${{ secrets.SSH_PORT || '22' }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} \
             "curl --fail --silent --show-error --max-time 15 http://127.0.0.1:80/ > /dev/null"
