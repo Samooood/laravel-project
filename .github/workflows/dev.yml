@@ -55,13 +55,9 @@ jobs:
           install -d -m 700 ~/.ssh
           echo "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          echo "--- Key file info ---"
-          wc -l ~/.ssh/deploy_key
-          head -1 ~/.ssh/deploy_key
-          tail -1 ~/.ssh/deploy_key
           ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
           chmod 600 ~/.ssh/known_hosts
-          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" -o StrictHostKeyChecking=no -v "$SSH_HOST" true 2>&1 | tail -20
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" -o StrictHostKeyChecking=no "$SSH_HOST" true
 
       - name: Synchronize application files
         if: success()
